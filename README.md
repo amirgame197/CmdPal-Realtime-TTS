@@ -26,7 +26,29 @@ It also supports a basic API route, configurable in settings.
 
 4. After installing, open the Command Palette. The extension should be discovered and accessible by searching `Realtime TTS`.
 
-### Delta Generator Options
+
+## Building From Source
+
+```powershell
+# Clone the repo if not done yet
+git clone https://github.com/amirgame197/CmdPal-Realtime-TTS
+cd CmdPal-Realtime-TTS
+
+# Remove any existing build artifacts
+Remove-Item .\src\bin, .\src\obj, .\src\AppxPackages -Recurse -Force -ErrorAction SilentlyContinue 
+dotnet restore
+
+# Run the core tests to verify any potential runtime errors
+dotnet run --project .\tests\CoreChecks\CoreChecks.csproj --configuration Debug -p:Platform=x64
+
+# Build the debug version's .msix file (appx package)
+dotnet build .\CmdPalRealtimeTTS.sln --configuration Debug -p:Platform=x64 -p:GenerateAppxPackageOnBuild=true -p:AppxPackageDir="AppxPackages\"
+
+# Or if you just want to build the .exe file, dont add the last two args
+dotnet build .\CmdPalRealtimeTTS.sln --configuration Debug -p:Platform=x64
+```
+
+## Delta Generator Options
 
 | Option | Description |
 | --- | --- |
@@ -36,7 +58,7 @@ It also supports a basic API route, configurable in settings.
 | Generate after 1.5 seconds of inactivity | Should the pending delta automatically gets played when you stop typing for 1.5 seconds? |
 | Abort current delta on Backspace | If you press Backspace, this sends a stop signal for current playing delta. |
 
-### TTS Settings
+## TTS Settings
 
 <img width="571" height="332" src="./.gallery/shot2.png" /><img width="573" height="331" src="./.gallery/shot3.png" />
 
@@ -52,7 +74,7 @@ It also supports a basic API route, configurable in settings.
 > **`*`**. The system uses Windows native voice models, but you can install the new natural voices using [Natural Voice SAPI Adapter](https://github.com/gexgd0419/NaturalVoiceSAPIAdapter) which is compatible with this extension.<br>
 > **`**`**. If you want your microphone to play the generated speech as if you are talking, you can install [VB-Audio Virtual Cable](https://vb-audio.com/Cable/) and choose the newly added `CABLE Input (VB-Audio Virtual Cable)` as your playback device. With that, a virtual microphone called `CABLE Output` will play the speech back.
 
-### API Capabilities
+## API Capabilities
 
 | Route | Methods | Description |
 | --- | --- | --- |
