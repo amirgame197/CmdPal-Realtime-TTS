@@ -25,11 +25,13 @@ internal sealed partial class SettingsPage : ContentPage
 internal sealed partial class TtsSettingsForm : FormContent
 {
     private readonly TtsRuntime _runtime;
+    private readonly TtsConfig _initialConfig;
 
     public TtsSettingsForm(TtsRuntime runtime)
     {
         _runtime = runtime;
-        Render(_runtime.GetConfig(), null);
+        _initialConfig = runtime.GetConfig();
+        Render(_initialConfig, null);
     }
 
     public override ICommandResult SubmitForm(string inputs, string data)
@@ -41,7 +43,7 @@ internal sealed partial class TtsSettingsForm : FormContent
             var action = OptionalString(inputValues, "action") ?? OptionalString(actionValues, "action");
             return action switch
             {
-                "cancel" => CommandResult.GoBack(),
+                "cancel" => Cancel(inputValues),
                 "reset" => CommandResult.Confirm(new ConfirmationArgs
                 {
                     Title = "Reset settings?",
@@ -60,11 +62,28 @@ internal sealed partial class TtsSettingsForm : FormContent
         }
     }
 
+    private ICommandResult Cancel(JsonObject values)
+    {
+        var editedConfig = ParseConfig(values, Copy(_initialConfig));
+        if (!HasChanges(_initialConfig, editedConfig))
+        {
+            return CommandResult.GoBack();
+        }
+
+        return CommandResult.Confirm(new ConfirmationArgs
+        {
+            Title = "Discard unsaved changes?",
+            Description = "Your settings have changed. Discard these changes?",
+            IsPrimaryCommandCritical = true,
+            PrimaryCommand = new DiscardSettingsCommand(),
+        });
+    }
+
     private ICommandResult Save(JsonObject values)
     {
         try
         {
-            var config = ParseConfig(values, _runtime.GetConfig());
+            var config = ParseConfig(values, Copy(_initialConfig));
             config.Validate();
             ValidateSelections(config);
             _runtime.SaveConfig(config);
@@ -79,6 +98,40 @@ internal sealed partial class TtsSettingsForm : FormContent
             return CommandResult.ShowToast($"Could not save settings: {exception.Message}");
         }
     }
+
+    private static bool HasChanges(TtsConfig original, TtsConfig edited) =>
+        !string.Equals(original.VoiceName, edited.VoiceName, StringComparison.Ordinal) ||
+        original.DeltaOnEnter != edited.DeltaOnEnter ||
+        original.DeltaOnPunctuation != edited.DeltaOnPunctuation ||
+        original.DeltaOnThreeWords != edited.DeltaOnThreeWords ||
+        original.DeltaOnInactivity != edited.DeltaOnInactivity ||
+        original.AbortOnBackspace != edited.AbortOnBackspace ||
+        original.ApiEnabled != edited.ApiEnabled ||
+        !string.Equals(original.ApiAddress, edited.ApiAddress, StringComparison.Ordinal) ||
+        original.ApiPort != edited.ApiPort ||
+        !string.Equals(original.PlaybackDeviceId, edited.PlaybackDeviceId, StringComparison.Ordinal) ||
+        !string.Equals(original.SaveDirectory, edited.SaveDirectory, StringComparison.Ordinal) ||
+        !string.Equals(original.SaveFormat, edited.SaveFormat, StringComparison.Ordinal) ||
+        original.SpeechRate != edited.SpeechRate ||
+        original.SpeechVolume != edited.SpeechVolume;
+
+    private static TtsConfig Copy(TtsConfig config) => new()
+    {
+        VoiceName = config.VoiceName,
+        DeltaOnEnter = config.DeltaOnEnter,
+        DeltaOnPunctuation = config.DeltaOnPunctuation,
+        DeltaOnThreeWords = config.DeltaOnThreeWords,
+        DeltaOnInactivity = config.DeltaOnInactivity,
+        AbortOnBackspace = config.AbortOnBackspace,
+        ApiEnabled = config.ApiEnabled,
+        ApiAddress = config.ApiAddress,
+        ApiPort = config.ApiPort,
+        PlaybackDeviceId = config.PlaybackDeviceId,
+        SaveDirectory = config.SaveDirectory,
+        SaveFormat = config.SaveFormat,
+        SpeechRate = config.SpeechRate,
+        SpeechVolume = config.SpeechVolume,
+    };
 
     private static TtsConfig ParseConfig(JsonObject values, TtsConfig config)
     {
@@ -259,4 +312,12 @@ internal sealed partial class ResetSettingsCommand : InvokableCommand
             return CommandResult.ShowToast($"Could not reset settings: {exception.Message}");
         }
     }
+}
+
+internal sealed partial class DiscardSettingsCommand : InvokableCommand
+{
+    public override string Name => "Discard changes";
+    public override IconInfo Icon => new("\uE777");
+
+    public override CommandResult Invoke() => CommandResult.GoBack();
 }

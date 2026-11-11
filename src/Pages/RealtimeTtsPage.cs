@@ -11,7 +11,7 @@ internal sealed partial class RealtimeTtsPage : DynamicListPage, IDisposable
     private readonly DeltaGenerator _deltas;
     private string _status = "Type to speak.";
 
-    public RealtimeTtsPage(TtsRuntime runtime, SettingsPage settingsPage)
+    public RealtimeTtsPage(TtsRuntime runtime, SettingsPage settingsPage, IconInfo icon)
     {
         _runtime = runtime;
         _settingsPage = settingsPage;
@@ -25,7 +25,7 @@ internal sealed partial class RealtimeTtsPage : DynamicListPage, IDisposable
         Title = "Realtime TTS";
         Name = "Speak";
         PlaceholderText = "Type text to speak...";
-        Icon = new IconInfo("\uE8D2");
+        Icon = icon;
     }
 
     public override void UpdateSearchText(string oldSearch, string newSearch)
