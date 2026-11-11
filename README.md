@@ -60,7 +60,7 @@ dotnet build .\CmdPalRealtimeTTS.sln --configuration Debug -p:Platform=x64
 
 ## TTS Settings
 
-<img width="571" height="332" src="./.gallery/shot2.png" /><img width="573" height="331" src="./.gallery/shot3.png" />
+<p align="center"><img width="50%" src="./.gallery/shot2.png" /><img width="50%" src="./.gallery/shot3.png" /></p>
 
 | Feature | Default value | Description |
 | --- | --- | --- |
