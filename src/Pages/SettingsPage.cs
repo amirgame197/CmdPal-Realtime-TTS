@@ -14,6 +14,7 @@ internal sealed partial class SettingsPage : ContentPage
     public SettingsPage(TtsRuntime runtime)
     {
         _runtime = runtime;
+        Id = "RealtimeTtsSettings";
         Name = "Settings";
         Icon = new IconInfo("\uE713");
     }
@@ -31,76 +32,70 @@ internal sealed partial class TtsSettingsForm : FormContent
         Render(_runtime.GetConfig(), null);
     }
 
-    public override ICommandResult SubmitForm(string inputs)
-    {
-        var values = JsonNode.Parse(inputs)?.AsObject()
-            ?? throw new InvalidDataException("The settings form did not return valid data.");
-        var action = ReadString(values, "action");
-
-        return action switch
-        {
-            "cancel" => CommandResult.GoBack(),
-            "reset" => CommandResult.Confirm(new ConfirmationArgs
-            {
-                Title = "Reset settings?",
-                Description = "This replaces every setting with its default value.",
-                IsPrimaryCommandCritical = true,
-                PrimaryCommand = new ResetSettingsCommand(_runtime),
-            }),
-            "save" => Save(inputs),
-            _ => CommandResult.KeepOpen(),
-        };
-    }
-
-    private ICommandResult Save(string inputs)
+    public override ICommandResult SubmitForm(string inputs, string data)
     {
         try
         {
-            var config = ParseConfig(inputs, _runtime.GetConfig());
+            var inputValues = ParseValues(inputs);
+            var actionValues = ParseValues(data);
+            var action = OptionalString(inputValues, "action") ?? OptionalString(actionValues, "action");
+            return action switch
+            {
+                "cancel" => CommandResult.GoBack(),
+                "reset" => CommandResult.Confirm(new ConfirmationArgs
+                {
+                    Title = "Reset settings?",
+                    Description = "This replaces every setting with its default value.",
+                    IsPrimaryCommandCritical = true,
+                    PrimaryCommand = new ResetSettingsCommand(_runtime),
+                }),
+                "save" => Save(inputValues),
+                _ => CommandResult.ShowToast("Settings action was not recognized."),
+            };
+        }
+        catch (Exception exception)
+        {
+            System.Diagnostics.Trace.TraceError($"Settings form submission failed: {exception}");
+            return CommandResult.ShowToast($"Could not submit settings: {exception.Message}");
+        }
+    }
+
+    private ICommandResult Save(JsonObject values)
+    {
+        try
+        {
+            var config = ParseConfig(values, _runtime.GetConfig());
             config.Validate();
             ValidateSelections(config);
             _runtime.SaveConfig(config);
 
-            return ToastNotificationService.TryShow(
-                "TTS settings saved",
-                "Your settings have been applied and the API server restarted.")
-                ? CommandResult.GoHome()
-                : CommandResult.ShowToast("TTS settings saved.");
-        }
-
-        catch (Exception exception) when (exception is InvalidDataException or JsonException or FormatException or ArgumentException)
-        {
-            Render(_runtime.GetConfig(), exception.Message);
-            return CommandResult.KeepOpen();
+            CommandResult.ShowToast("TTS settings saved");
+            return CommandResult.GoBack();
         }
 
         catch (Exception exception)
         {
             System.Diagnostics.Trace.TraceError($"Could not save Realtime TTS settings: {exception}");
-            Render(_runtime.GetConfig(), $"Could not apply settings: {exception.Message}");
-            return CommandResult.KeepOpen();
+            return CommandResult.ShowToast($"Could not save settings: {exception.Message}");
         }
     }
 
-    private static TtsConfig ParseConfig(string inputs, TtsConfig config)
+    private static TtsConfig ParseConfig(JsonObject values, TtsConfig config)
     {
-        var values = JsonNode.Parse(inputs)?.AsObject()
-            ?? throw new InvalidDataException("The settings form did not return valid data.");
-
-        config.VoiceName = ReadString(values, "voiceName");
-        config.DeltaOnEnter = ReadBool(values, "deltaOnEnter");
-        config.DeltaOnPunctuation = ReadBool(values, "deltaOnPunctuation");
-        config.DeltaOnThreeWords = ReadBool(values, "deltaOnThreeWords");
-        config.DeltaOnInactivity = ReadBool(values, "deltaOnInactivity");
-        config.AbortOnBackspace = ReadBool(values, "abortOnBackspace");
-        config.ApiEnabled = ReadBool(values, "apiEnabled");
-        config.ApiAddress = ReadString(values, "apiAddress");
-        config.ApiPort = ReadInt(values, "apiPort");
-        config.PlaybackDeviceId = ReadString(values, "playbackDeviceId");
-        config.SaveDirectory = ReadString(values, "saveDirectory");
-        config.SaveFormat = ReadString(values, "saveFormat").ToLowerInvariant();
-        config.SpeechRate = ReadInt(values, "speechRate");
-        config.SpeechVolume = ReadInt(values, "speechVolume");
+        config.VoiceName = ReadString(values, "voiceName", config.VoiceName);
+        config.DeltaOnEnter = ReadBool(values, "deltaOnEnter", config.DeltaOnEnter);
+        config.DeltaOnPunctuation = ReadBool(values, "deltaOnPunctuation", config.DeltaOnPunctuation);
+        config.DeltaOnThreeWords = ReadBool(values, "deltaOnThreeWords", config.DeltaOnThreeWords);
+        config.DeltaOnInactivity = ReadBool(values, "deltaOnInactivity", config.DeltaOnInactivity);
+        config.AbortOnBackspace = ReadBool(values, "abortOnBackspace", config.AbortOnBackspace);
+        config.ApiEnabled = ReadBool(values, "apiEnabled", config.ApiEnabled);
+        config.ApiAddress = ReadString(values, "apiAddress", config.ApiAddress);
+        config.ApiPort = ReadInt(values, "apiPort", config.ApiPort);
+        config.PlaybackDeviceId = ReadString(values, "playbackDeviceId", config.PlaybackDeviceId);
+        config.SaveDirectory = ReadString(values, "saveDirectory", config.SaveDirectory);
+        config.SaveFormat = ReadString(values, "saveFormat", config.SaveFormat).ToLowerInvariant();
+        config.SpeechRate = ReadInt(values, "speechRate", config.SpeechRate);
+        config.SpeechVolume = ReadInt(values, "speechVolume", config.SpeechVolume);
         return config;
     }
 
@@ -133,6 +128,7 @@ internal sealed partial class TtsSettingsForm : FormContent
 
         var body = new List<object>
         {
+            new { type = "TextBlock", text = $"Configuration file: {_runtime.ConfigPath}", wrap = true },
             InputChoice("Windows voice", "voiceName", voices, config.VoiceName),
             InputToggle("Generate on Enter", "deltaOnEnter", config.DeltaOnEnter),
             InputToggle("Generate on punctuation or symbols", "deltaOnPunctuation", config.DeltaOnPunctuation),
@@ -182,23 +178,50 @@ internal sealed partial class TtsSettingsForm : FormContent
     private static object InputNumber(string label, string id, int value, int minimum, int maximum) =>
         new { type = "Input.Number", label, id, value, min = minimum, max = maximum, isRequired = true };
 
-    private static string ReadString(JsonObject values, string key) =>
-        values[key]?.GetValue<string>() ?? throw new InvalidDataException($"Missing value for {key}.");
-
-    private static bool ReadBool(JsonObject values, string key)
+    private static JsonObject ParseValues(string json)
     {
-        var value = values[key] ?? throw new InvalidDataException($"Missing value for {key}.");
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return [];
+        }
+
+        return JsonNode.Parse(json) as JsonObject
+            ?? throw new InvalidDataException("Form submission data must be a JSON object.");
+    }
+
+    private static string? OptionalString(JsonObject values, string key)
+    {
+        var value = values[key];
+        return value is JsonValue jsonValue && jsonValue.TryGetValue<string>(out var text) ? text : null;
+    }
+
+    private static string ReadString(JsonObject values, string key, string fallback) =>
+        OptionalString(values, key) ?? fallback;
+
+    private static bool ReadBool(JsonObject values, string key, bool fallback)
+    {
+        var value = values[key];
+        if (value is null)
+        {
+            return fallback;
+        }
+
         return value.ToString() switch
         {
             "true" => true,
             "false" => false,
-            _ => throw new InvalidDataException($"Invalid boolean value for {key}."),
+            _ => fallback,
         };
     }
 
-    private static int ReadInt(JsonObject values, string key)
+    private static int ReadInt(JsonObject values, string key, int fallback)
     {
-        var value = values[key] ?? throw new InvalidDataException($"Missing value for {key}.");
+        var value = values[key];
+        if (value is null)
+        {
+            return fallback;
+        }
+
         if (value is JsonValue jsonValue && jsonValue.TryGetValue<int>(out var number))
         {
             return number;
@@ -206,7 +229,7 @@ internal sealed partial class TtsSettingsForm : FormContent
 
         return int.TryParse(value.ToString(), out number)
             ? number
-            : throw new InvalidDataException($"Invalid numeric value for {key}.");
+            : fallback;
     }
 }
 
@@ -227,11 +250,8 @@ internal sealed partial class ResetSettingsCommand : InvokableCommand
         try
         {
             _runtime.ResetConfig();
-            return ToastNotificationService.TryShow(
-                "Settings reset",
-                "All settings were restored to their default values.")
-                ? CommandResult.GoHome()
-                : CommandResult.ShowToast("TTS settings reset to defaults.");
+            CommandResult.ShowToast("TTS settings reset to defaults");
+            return CommandResult.GoBack();
         }
         catch (Exception exception)
         {

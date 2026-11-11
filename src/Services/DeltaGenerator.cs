@@ -64,7 +64,9 @@ public sealed class DeltaGenerator : IDisposable
             var delta = _text[_generatedLength..];
             var config = _getConfig();
             var punctuationTriggered = config.DeltaOnPunctuation && HasPunctuation(delta);
-            var wordsTriggered = config.DeltaOnThreeWords && Has3Words15Chars(delta);
+            var wordsTriggered = config.DeltaOnThreeWords &&
+                EndsAtWordBoundary(delta) &&
+                Has3Words15Chars(delta);
 
             if (punctuationTriggered || wordsTriggered)
             {
@@ -100,7 +102,11 @@ public sealed class DeltaGenerator : IDisposable
                 return false;
             }
 
-            _enqueue(delta);
+            if (HasSpeechContent(delta))
+            {
+                _enqueue(delta);
+            }
+
             return true;
         }
     }
@@ -143,9 +149,47 @@ public sealed class DeltaGenerator : IDisposable
 
     private static bool Has3Words15Chars(string value)
     {
-        var words = value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
-        return words.Length >= 3 && value.Count(character => !char.IsWhiteSpace(character)) >= 15;
+        var wordCount = 0;
+        var characterCount = 0;
+        var inWord = false;
+
+        foreach (var rune in value.EnumerateRunes())
+        {
+            if (IsWordCharacter(rune))
+            {
+                characterCount++;
+                if (!inWord)
+                {
+                    wordCount++;
+                    inWord = true;
+                }
+            }
+            else
+            {
+                inWord = false;
+            }
+        }
+
+        return wordCount >= 3 && characterCount >= 15;
     }
+
+    private static bool EndsAtWordBoundary(string value)
+    {
+        var lastRune = value.EnumerateRunes().LastOrDefault();
+        return lastRune.Value != 0 && (Rune.IsWhiteSpace(lastRune) || !IsWordCharacter(lastRune));
+    }
+
+    private static bool IsWordCharacter(Rune rune)
+    {
+        var category = Rune.GetUnicodeCategory(rune);
+        return Rune.IsLetterOrDigit(rune) ||
+            category is UnicodeCategory.NonSpacingMark
+                or UnicodeCategory.SpacingCombiningMark
+                or UnicodeCategory.EnclosingMark;
+    }
+
+    private static bool HasSpeechContent(string value) =>
+        value.EnumerateRunes().Any(Rune.IsLetterOrDigit);
 
     public void Dispose() => _timer.Dispose();
 }

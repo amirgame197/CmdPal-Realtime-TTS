@@ -1,3 +1,4 @@
+using System.Text;
 using System.Speech.Synthesis;
 using NAudio.CoreAudioApi;
 using NAudio.Wave;
@@ -34,7 +35,10 @@ public sealed class NativeSpeechService
     public static async Task<SpeechAudio> SynthesizeAsync(string text, TtsConfig config, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(text);
-        return await Task.Run(() =>
+        text = PrepareSpeechText(text);
+        ArgumentException.ThrowIfNullOrWhiteSpace(text);
+
+        return await Task.Run(async () =>
         {
             cancellationToken.ThrowIfCancellationRequested();
             using var synthesizer = new SpeechSynthesizer();
@@ -60,11 +64,44 @@ public sealed class NativeSpeechService
 
             using var audio = new MemoryStream();
             synthesizer.SetOutputToWaveStream(audio);
-            synthesizer.Speak(text);
-            synthesizer.SetOutputToNull();
+
+            var synthesisCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            synthesizer.SpeakCompleted += (_, args) =>
+            {
+                if (args.Error is not null)
+                {
+                    synthesisCompleted.TrySetException(args.Error);
+                }
+                else if (args.Cancelled)
+                {
+                    synthesisCompleted.TrySetCanceled();
+                }
+                else
+                {
+                    synthesisCompleted.TrySetResult();
+                }
+            };
+
+            using var cancellationRegistration = cancellationToken.Register(() =>
+            {
+                try
+                {
+                    synthesizer.SpeakAsyncCancelAll();
+                }
+                catch (ObjectDisposedException)
+                {
+                }
+            });
             
+            synthesizer.SpeakAsync(text);
+            await synthesisCompleted.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+            synthesizer.SetOutputToNull();
+
             cancellationToken.ThrowIfCancellationRequested();
-            return new SpeechAudio(audio.ToArray(), wordBoundaries.Order().ToArray());
+            var bytes = audio.ToArray();
+            ValidateWaveAudio(bytes);
+            return new SpeechAudio(bytes, [.. wordBoundaries.Order()]);
         }, cancellationToken).ConfigureAwait(false);
     }
 
@@ -91,6 +128,14 @@ public sealed class NativeSpeechService
         };
         output.Init(wave);
         output.Play();
+        using var cancellationRegistration = cancellationToken.Register(() =>
+        {
+            try
+            {
+                output.Stop();
+            }
+            catch (ObjectDisposedException) {}
+        });
 
         var stopAt = TimeSpan.MaxValue;
         while (output.PlaybackState == PlaybackState.Playing)
@@ -113,10 +158,32 @@ public sealed class NativeSpeechService
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        if (stopAt == TimeSpan.MaxValue)
+        await completed.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    public static void ValidateWaveAudio(byte[] bytes)
+    {
+        using var wave = new WaveFileReader(new MemoryStream(bytes, writable: false));
+        if (wave.Length == 0 || wave.TotalTime <= TimeSpan.Zero)
         {
-            await completed.Task.ConfigureAwait(false);
+            throw new InvalidDataException("The selected Windows voice produced no audio for this text.");
         }
+    }
+
+    private static string PrepareSpeechText(string text)
+    {
+        var output = new System.Text.StringBuilder(text.Length);
+        foreach (var rune in text.EnumerateRunes())
+        {
+            if (Rune.IsControl(rune) && rune.Value is not ('\n' or '\r' or '\t'))
+            {
+                continue;
+            }
+
+            output.Append(rune.ToString());
+        }
+
+        return output.ToString();
     }
 
     public static async Task SaveAsync(string text, TtsConfig config, CancellationToken cancellationToken)

@@ -6,19 +6,20 @@ public sealed class TtsRuntime : IAsyncDisposable
 {
     private readonly Lock _configGate = new();
     private readonly ConfigStore _store;
-    private readonly NativeSpeechService _speech;
     private readonly PlaybackQueue _queue;
     private readonly LocalApiServer _api;
     private TtsConfig _config;
 
     public string ApiStatus { get; private set; } = "API status unavailable";
+    public string ConfigPath => _store.ConfigPath;
+    public event Action<string>? SpeechFailed;
 
     public TtsRuntime()
     {
         _store = new ConfigStore();
-        _speech = new NativeSpeechService();
         _config = _store.Load();
-        _queue = new PlaybackQueue(_speech, GetConfig);
+        _queue = new PlaybackQueue(GetConfig);
+        _queue.ErrorOccurred += OnSpeechFailed;
         _api = new LocalApiServer(_queue);
         RestartApi(throwOnFailure: false);
     }
@@ -93,6 +94,8 @@ public sealed class TtsRuntime : IAsyncDisposable
         await _api.DisposeAsync().ConfigureAwait(false);
         await _queue.DisposeAsync().ConfigureAwait(false);
     }
+
+    private void OnSpeechFailed(string message) => SpeechFailed?.Invoke(message);
 
     private static TtsConfig Copy(TtsConfig config) => new()
     {

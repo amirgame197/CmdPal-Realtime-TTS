@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 
 namespace CmdPalRealtimeTTS.Configuration;
@@ -69,6 +70,7 @@ public sealed class ConfigStore
             {
                 var defaults = new TtsConfig();
                 defaults.Validate();
+                SaveCore(defaults);
                 return defaults;
             }
 
@@ -87,15 +89,20 @@ public sealed class ConfigStore
         
         lock (_gate)
         {
-            var directory = Path.GetDirectoryName(ConfigPath)
-                ?? throw new InvalidOperationException("The configuration path has no parent directory.");
-            Directory.CreateDirectory(directory);
-
-            // ? Prevent potential data loss by replacing the config file instantly
-            var temporaryPath = ConfigPath + ".tmp";
-            File.WriteAllText(temporaryPath, JsonSerializer.Serialize(config, Options));
-            File.Move(temporaryPath, ConfigPath, overwrite: true);
+            SaveCore(config);
         }
+    }
+
+    private void SaveCore(TtsConfig config)
+    {
+        var directory = Path.GetDirectoryName(ConfigPath)
+            ?? throw new InvalidOperationException("The configuration path has no parent directory.");
+        Directory.CreateDirectory(directory);
+        
+        // ? Prevent potential data loss by replacing the config file instantly
+        var temporaryPath = ConfigPath + ".tmp";
+        File.WriteAllText(temporaryPath, JsonSerializer.Serialize(config, Options));
+        File.Move(temporaryPath, ConfigPath, overwrite: true);
     }
 
     public static TtsConfig Defaults() => new();

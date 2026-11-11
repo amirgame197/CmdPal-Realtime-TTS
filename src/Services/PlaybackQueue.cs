@@ -15,8 +15,9 @@ public sealed class PlaybackQueue : ISpeechPlaybackQueue, IAsyncDisposable
         new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
     private readonly Channel<PlaybackRequest> _playbackQueue = Channel.CreateUnbounded<PlaybackRequest>(
         new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });
-    private readonly NativeSpeechService _speech;
     private readonly Func<TtsConfig> _getConfig;
+    private readonly Func<string, TtsConfig, CancellationToken, Task<SpeechAudio>> _synthesize;
+    private readonly Func<SpeechAudio, string, Func<bool>, CancellationToken, Task> _play;
     private readonly CancellationTokenSource _shutdown = new();
     private readonly Task _generationWorker;
     private readonly Task _playbackWorker;
@@ -25,13 +26,23 @@ public sealed class PlaybackQueue : ISpeechPlaybackQueue, IAsyncDisposable
     private PlaybackRequest? _activeItem;
     private int _abortAfterWord;
 
-    public PlaybackQueue(NativeSpeechService speech, Func<TtsConfig> getConfig)
+    public PlaybackQueue(Func<TtsConfig> getConfig)
+        : this(getConfig, NativeSpeechService.SynthesizeAsync, NativeSpeechService.PlayAsync)
+    {}
+
+    public PlaybackQueue(
+        Func<TtsConfig> getConfig,
+        Func<string, TtsConfig, CancellationToken, Task<SpeechAudio>> synthesize,
+        Func<SpeechAudio, string, Func<bool>, CancellationToken, Task> play)
     {
-        _speech = speech;
         _getConfig = getConfig;
+        _synthesize = synthesize;
+        _play = play;
         _generationWorker = GenerateAsync();
         _playbackWorker = PlayAsync();
     }
+
+    public event Action<string>? ErrorOccurred;
 
     public bool Enqueue(string text) => Enqueue(text, liveDelta: false);
 
@@ -70,22 +81,22 @@ public sealed class PlaybackQueue : ISpeechPlaybackQueue, IAsyncDisposable
         {
             await foreach (var request in _generationQueue.Reader.ReadAllAsync(_shutdown.Token).ConfigureAwait(false))
             {
-                var config = _getConfig();
                 try
                 {
-                    var audio = await NativeSpeechService.SynthesizeAsync(request.Text, config, _shutdown.Token).ConfigureAwait(false);
+                    var config = _getConfig();
+                    var audio = await _synthesize(request.Text, config, _shutdown.Token).ConfigureAwait(false);
                     await _playbackQueue.Writer.WriteAsync(
                         new PlaybackRequest(audio, config.PlaybackDeviceId, request.LiveDelta),
                         _shutdown.Token).ConfigureAwait(false);
                 }
-
+                
                 catch (OperationCanceledException) when (_shutdown.IsCancellationRequested)
                 {
                     break;
                 }
                 catch (Exception exception)
                 {
-                    System.Diagnostics.Trace.TraceError($"Speech generation failed: {exception}");
+                    ReportError("Speech generation failed", exception);
                 }
             }
         }
@@ -112,7 +123,7 @@ public sealed class PlaybackQueue : ISpeechPlaybackQueue, IAsyncDisposable
 
                 try
                 {
-                    await NativeSpeechService.PlayAsync(
+                    await _play(
                         item.Audio,
                         item.DeviceId,
                         () => item.LiveDelta && Interlocked.Exchange(ref _abortAfterWord, 0) == 1,
@@ -123,7 +134,7 @@ public sealed class PlaybackQueue : ISpeechPlaybackQueue, IAsyncDisposable
                 catch (OperationCanceledException) when (playback.IsCancellationRequested) {}
                 catch (Exception exception)
                 {
-                    System.Diagnostics.Trace.TraceError($"Speech playback failed: {exception}");
+                    ReportError("Speech playback failed", exception);
                 }
                 finally
                 {
@@ -141,6 +152,20 @@ public sealed class PlaybackQueue : ISpeechPlaybackQueue, IAsyncDisposable
             }
         }
         catch (OperationCanceledException) when (_shutdown.IsCancellationRequested) {}
+    }
+
+    private void ReportError(string operation, Exception exception)
+    {
+        var message = $"{operation}: {exception.Message}";
+        System.Diagnostics.Trace.TraceError($"{operation}: {exception}");
+        try
+        {
+            ErrorOccurred?.Invoke(message);
+        }
+        catch (Exception callbackException)
+        {
+            System.Diagnostics.Trace.TraceError($"Speech error notification failed: {callbackException}");
+        }
     }
 
     public async ValueTask DisposeAsync()

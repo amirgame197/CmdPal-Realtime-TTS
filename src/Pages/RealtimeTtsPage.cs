@@ -4,7 +4,7 @@ using CmdPalRealtimeTTS.Services;
 
 namespace CmdPalRealtimeTTS.Pages;
 
-internal sealed partial class RealtimeTtsPage : ListPage, IDisposable
+internal sealed partial class RealtimeTtsPage : DynamicListPage, IDisposable
 {
     private readonly TtsRuntime _runtime;
     private readonly SettingsPage _settingsPage;
@@ -20,6 +20,7 @@ internal sealed partial class RealtimeTtsPage : ListPage, IDisposable
             text => { runtime.EnqueueLiveDelta(text); },
             runtime.AbortCurrentAfterWord
         );
+        runtime.SpeechFailed += ShowStatus;
         
         Title = "Realtime TTS";
         Name = "Speak";
@@ -27,20 +28,15 @@ internal sealed partial class RealtimeTtsPage : ListPage, IDisposable
         Icon = new IconInfo("\uE8D2");
     }
 
-    public override string SearchText
+    public override void UpdateSearchText(string oldSearch, string newSearch)
     {
-        get => base.SearchText;
-        set
-        {
-            base.SearchText = value;
-            _deltas.Update(value);
-        }
+        _deltas.Update(newSearch);
     }
 
     public override IListItem[] GetItems()
     {
-        var text = SearchText;
         var enterEnabled = _runtime.GetConfig().DeltaOnEnter;
+
         return
         [
             new ListItem(new SpeakNowCommand(_deltas, this, enterEnabled))
@@ -48,27 +44,25 @@ internal sealed partial class RealtimeTtsPage : ListPage, IDisposable
                 Title = enterEnabled ? "Speak now" : "Enter rule disabled",
                 Subtitle = !enterEnabled
                     ? "Enable the Enter rule in Settings to speak on Enter"
-                    : text.Length == 0 ? "Speak the pending text delta" : $"Speak: {text}",
+                    : "Speak the pending text delta",
             },
 
-            new ListItem(new SaveAudioCommand(_runtime, this, text))
+            new ListItem(new SaveAudioCommand(_runtime, this))
             {
                 Title = "Save audio",
-                Subtitle = text.Length == 0 ? "Type some text first" : $"Save audio for: {text}",
+                Subtitle = string.IsNullOrWhiteSpace(SearchText) ? "Type some text first" : "Save the current text as an audio file",
             },
 
-            new ListItem(new OpenSettingsCommand(_settingsPage))
+            new ListItem(_settingsPage)
             {
                 Title = "Settings",
-                Subtitle = text.Length == 0 ? "Voices, delta rules, audio and API" : $"Settings: {text}",
+                Subtitle = "Voices, delta rules, audio and API",
             },
 
             new ListItem(new NoOpCommand())
             {
-                Title = "Status",
-                Subtitle = text.Length == 0
-                    ? $"{_status} API: {_runtime.ApiStatus}"
-                    : $"{text} {_status} API: {_runtime.ApiStatus}",
+                Title = "",
+                Subtitle = $"{_status}",
             },
         ];
     }
@@ -79,7 +73,11 @@ internal sealed partial class RealtimeTtsPage : ListPage, IDisposable
         RaiseItemsChanged();
     }
 
-    public void Dispose() => _deltas.Dispose();
+    public void Dispose()
+    {
+        _runtime.SpeechFailed -= ShowStatus;
+        _deltas.Dispose();
+    }
 
 }
 
@@ -109,13 +107,11 @@ internal sealed partial class SaveAudioCommand : InvokableCommand
 {
     private readonly TtsRuntime _runtime;
     private readonly RealtimeTtsPage _page;
-    private readonly string _text;
 
-    public SaveAudioCommand(TtsRuntime runtime, RealtimeTtsPage page, string text)
+    public SaveAudioCommand(TtsRuntime runtime, RealtimeTtsPage page)
     {
         _runtime = runtime;
         _page = page;
-        _text = text;
     }
 
     public override string Name => "Save audio";
@@ -123,22 +119,23 @@ internal sealed partial class SaveAudioCommand : InvokableCommand
 
     public override CommandResult Invoke()
     {
-        if (string.IsNullOrWhiteSpace(_text))
+        var text = _page.SearchText;
+        if (string.IsNullOrWhiteSpace(text))
         {
             _page.ShowStatus("Type some text before saving audio.");
             return CommandResult.KeepOpen();
         }
 
         _page.ShowStatus("Generating audio file...");
-        _ = SaveAsync();
+        _ = SaveAsync(text);
         return CommandResult.KeepOpen();
     }
 
-    private async Task SaveAsync()
+    private async Task SaveAsync(string text)
     {
         try
         {
-            await _runtime.SaveAudioAsync(_text).ConfigureAwait(false);
+            await _runtime.SaveAudioAsync(text).ConfigureAwait(false);
             _page.ShowStatus("Audio file saved successfully.");
         }
         catch (Exception exception)
@@ -147,20 +144,4 @@ internal sealed partial class SaveAudioCommand : InvokableCommand
             _page.ShowStatus($"Audio save failed: {exception.Message}");
         }
     }
-}
-
-internal sealed partial class OpenSettingsCommand : InvokableCommand
-{
-    private readonly SettingsPage _page;
-
-    public OpenSettingsCommand(SettingsPage page)
-    {
-        _page = page;
-    }
-
-    public override string Name => "Settings";
-    public override IconInfo Icon => new("\uE713");
-
-    public override CommandResult Invoke() =>
-        CommandResult.GoToPage(new GoToPageArgs { PageId = _page.Id });
 }
